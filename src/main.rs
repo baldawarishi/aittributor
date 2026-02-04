@@ -17,6 +17,10 @@ struct Cli {
     /// Commit SHA (when amending)
     #[arg(default_value = "")]
     commit_sha: String,
+
+    /// Enable debug output
+    #[arg(long)]
+    debug: bool,
 }
 
 struct Agent {
@@ -98,18 +102,45 @@ fn find_agent_by_env() -> Option<&'static Agent> {
     })
 }
 
-fn find_agent_for_process(process: &sysinfo::Process) -> Option<&'static Agent> {
+fn find_agent_for_process(process: &sysinfo::Process, debug: bool) -> Option<&'static Agent> {
     let name = process.name().to_string_lossy();
+    if debug {
+        eprintln!("      Checking process name: {}", name);
+    }
     if let Some(agent) = find_agent_by_name(&name) {
+        if debug {
+            eprintln!("        ✓ Matched agent: {}", agent.email);
+        }
         return Some(agent);
     }
 
+    // Check basename(argv[0])
+    if let Some(arg0) = process.cmd().first() {
+        let arg0_str = arg0.to_string_lossy();
+        if debug {
+            eprintln!("      Checking basename(argv[0]): {}", arg0_str);
+        }
+        if let Some(agent) = find_agent_by_name(&arg0_str) {
+            if debug {
+                eprintln!("        ✓ Matched agent: {}", agent.email);
+            }
+            return Some(agent);
+        }
+    }
+
+    // Check first basename(argv[1:]) that doesn't start with '-'
     if let Some(arg) = process.cmd().iter().skip(1).find(|arg| {
         let arg_str = arg.to_string_lossy();
         !arg_str.starts_with('-')
     }) {
         let arg_str = arg.to_string_lossy();
+        if debug {
+            eprintln!("      Checking first non-flag arg from argv[1:]: {}", arg_str);
+        }
         if let Some(agent) = find_agent_by_name(&arg_str) {
+            if debug {
+                eprintln!("        ✓ Matched agent: {}", agent.email);
+            }
             return Some(agent);
         }
     }
@@ -117,11 +148,18 @@ fn find_agent_for_process(process: &sysinfo::Process) -> Option<&'static Agent> 
     None
 }
 
-fn walk_ancestry(system: &System) -> Option<&'static Agent> {
+fn walk_ancestry(system: &System, debug: bool) -> Option<&'static Agent> {
     let mut current_pid = Pid::from_u32(std::process::id());
 
+    if debug {
+        eprintln!("\nWalking ancestry from PID {}...", current_pid);
+    }
+
     while let Some(process) = system.process(current_pid) {
-        if let Some(agent) = find_agent_for_process(process) {
+        if debug {
+            eprintln!("  PID {}: {:?}", current_pid, process.name());
+        }
+        if let Some(agent) = find_agent_for_process(process, debug) {
             return Some(agent);
         }
 
@@ -136,7 +174,7 @@ fn walk_ancestry(system: &System) -> Option<&'static Agent> {
     None
 }
 
-fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf) -> Option<&'static Agent> {
+fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug: bool) -> Option<&'static Agent> {
     let mut queue = std::collections::VecDeque::new();
     let mut visited = std::collections::HashSet::new();
 
@@ -152,10 +190,17 @@ fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf) -> Op
             None => continue,
         };
 
-        if let Some(agent) = find_agent_for_process(process)
+        if debug {
+            eprintln!("    Checking PID {}: {:?}", pid, process.name());
+        }
+
+        if let Some(agent) = find_agent_for_process(process, debug)
             && let Some(cwd) = process.cwd()
             && cwd.starts_with(repo_path)
         {
+            if debug {
+                eprintln!("    Found agent in tree with matching cwd");
+            }
             return Some(agent);
         }
 
@@ -169,9 +214,13 @@ fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf) -> Op
     None
 }
 
-fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf) -> Option<&'static Agent> {
+fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf, debug: bool) -> Option<&'static Agent> {
     let mut current_pid = Pid::from_u32(std::process::id());
     let mut checked_ancestors = std::collections::HashSet::new();
+
+    if debug {
+        eprintln!("\nWalking ancestry and descendants...");
+    }
 
     loop {
         let process = system.process(current_pid)?;
@@ -185,12 +234,16 @@ fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf) -> Option
             _ => break,
         };
 
+        if debug {
+            eprintln!("  Checking siblings of PID {} (parent: {})", current_pid, parent_pid);
+        }
+
         for sibling in system.processes().values() {
             if sibling.parent() != Some(parent_pid) {
                 continue;
             }
 
-            if let Some(agent) = check_process_tree(system, sibling.pid(), repo_path) {
+            if let Some(agent) = check_process_tree(system, sibling.pid(), repo_path, debug) {
                 return Some(agent);
             }
         }
@@ -244,27 +297,37 @@ fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn detect_agent() -> Option<&'static Agent> {
+fn detect_agent(debug: bool) -> Option<&'static Agent> {
+    if debug {
+        eprintln!("=== Agent Detection Debug ===");
+        eprintln!("\nChecking environment variables...");
+    }
     if let Some(agent) = find_agent_by_env() {
+        if debug {
+            eprintln!("  ✓ Found agent via env: {}", agent.email);
+        }
         return Some(agent);
     }
 
     let current_dir = std::env::current_dir().ok()?;
     let repo_path = find_git_root(&current_dir).unwrap_or(current_dir);
+    if debug {
+        eprintln!("  Repository path: {}", repo_path.display());
+    }
     let system = System::new_all();
 
-    if let Some(agent) = walk_ancestry(&system) {
+    if let Some(agent) = walk_ancestry(&system, debug) {
         return Some(agent);
     }
 
-    walk_ancestry_and_descendants(&system, &repo_path)
+    walk_ancestry_and_descendants(&system, &repo_path, debug)
 }
 
 fn main() {
     let cli = Cli::parse();
 
     let Some(commit_msg_file) = cli.commit_msg_file else {
-        match detect_agent() {
+        match detect_agent(cli.debug) {
             Some(agent) => println!("{}", agent.email),
             None => {
                 eprintln!("No agent found");
@@ -274,7 +337,7 @@ fn main() {
         return;
     };
 
-    if let Some(agent) = detect_agent()
+    if let Some(agent) = detect_agent(cli.debug)
         && let Err(e) = append_trailers(&commit_msg_file, agent)
     {
         eprintln!("aittributor: failed to append trailers: {}", e);
