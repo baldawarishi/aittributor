@@ -254,18 +254,35 @@ fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf, debug: bo
     None
 }
 
-fn append_trailers(commit_msg_file: &PathBuf, agent: &Agent) -> std::io::Result<()> {
+fn append_trailers(commit_msg_file: &PathBuf, agent: &Agent, debug: bool) -> std::io::Result<()> {
     let content = fs::read_to_string(commit_msg_file)?;
 
     if content.contains("Co-authored-by:") && content.contains(agent.email) {
+        if debug {
+            eprintln!("\n=== Git Command ===");
+            eprintln!("Trailers already present, skipping git interpret-trailers");
+        }
         return Ok(());
+    }
+
+    let co_authored = format!("Co-authored-by: {}", agent.email);
+
+    if debug {
+        eprintln!("\n=== Git Command ===");
+        eprintln!(
+            "git interpret-trailers --in-place --trailer \"{}\" --if-exists addIfDifferent --trailer \"Ai-assisted: true\" \"{}\"",
+            co_authored,
+            commit_msg_file.display()
+        );
     }
 
     let output = std::process::Command::new("git")
         .arg("interpret-trailers")
         .arg("--in-place")
         .arg("--trailer")
-        .arg(format!("Co-authored-by: {}", agent.email))
+        .arg(&co_authored)
+        .arg("--if-exists")
+        .arg("addIfDifferent")
         .arg("--trailer")
         .arg("Ai-assisted: true")
         .arg(commit_msg_file)
@@ -338,7 +355,7 @@ fn main() {
     };
 
     if let Some(agent) = detect_agent(cli.debug)
-        && let Err(e) = append_trailers(&commit_msg_file, agent)
+        && let Err(e) = append_trailers(&commit_msg_file, agent, cli.debug)
     {
         eprintln!("aittributor: failed to append trailers: {}", e);
     }
@@ -386,7 +403,7 @@ mod tests {
         writeln!(file, "Initial commit").unwrap();
 
         let agent = &KNOWN_AGENTS[0];
-        append_trailers(&file.path().to_path_buf(), agent).unwrap();
+        append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
 
         let content = fs::read_to_string(file.path()).unwrap();
         assert!(content.contains("Co-authored-by: Claude Code <noreply@anthropic.com>"));
@@ -399,10 +416,10 @@ mod tests {
         writeln!(file, "Initial commit").unwrap();
 
         let agent = &KNOWN_AGENTS[0];
-        append_trailers(&file.path().to_path_buf(), agent).unwrap();
+        append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
         let content1 = fs::read_to_string(file.path()).unwrap();
 
-        append_trailers(&file.path().to_path_buf(), agent).unwrap();
+        append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
         let content2 = fs::read_to_string(file.path()).unwrap();
 
         assert_eq!(content1, content2);
@@ -425,5 +442,28 @@ mod tests {
 
         let found = find_git_root(&temp_dir.path().to_path_buf());
         assert_eq!(found, Some(temp_dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_append_trailers_multiple_agents() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Initial commit").unwrap();
+
+        let agent1 = &KNOWN_AGENTS[0]; // Claude
+        let agent2 = &KNOWN_AGENTS[8]; // Amp
+
+        append_trailers(&file.path().to_path_buf(), agent1, false).unwrap();
+        append_trailers(&file.path().to_path_buf(), agent2, false).unwrap();
+
+        let content = fs::read_to_string(file.path()).unwrap();
+        assert!(content.contains("Co-authored-by: Claude Code <noreply@anthropic.com>"));
+        assert!(content.contains("Co-authored-by: Amp <amp@ampcode.com>"));
+
+        let ai_assisted_count = content.matches("Ai-assisted: true").count();
+        assert_eq!(
+            ai_assisted_count, 1,
+            "Ai-assisted trailer should appear exactly once, found {} occurrences",
+            ai_assisted_count
+        );
     }
 }
