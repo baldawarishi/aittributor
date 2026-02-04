@@ -50,3 +50,9 @@ prepare-commit-msg:
     aittributor:
       run: aittributor {1}
 ```
+
+## Direct `.git/hooks` usage
+
+```bash
+ln -s /usr/local/bin/aittributor .git/hooks/prepare-commit-msg
+```
