@@ -79,10 +79,13 @@ const KNOWN_AGENTS: &[Agent] = &[
 ];
 
 fn find_agent_by_name(name: &str) -> Option<&'static Agent> {
-    let name_lower = name.to_lowercase();
-    KNOWN_AGENTS
-        .iter()
-        .find(|agent| !agent.process_names.is_empty() && agent.process_names.iter().any(|&pn| name_lower.contains(pn)))
+    let path = Path::new(name);
+    let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or(name);
+    let basename_lower = basename.to_lowercase();
+
+    KNOWN_AGENTS.iter().find(|agent| {
+        !agent.process_names.is_empty() && agent.process_names.iter().any(|&pn| basename_lower.contains(pn))
+    })
 }
 
 fn find_agent_by_env() -> Option<&'static Agent> {
@@ -101,9 +104,12 @@ fn find_agent_for_process(process: &sysinfo::Process) -> Option<&'static Agent> 
         return Some(agent);
     }
 
-    if let Some(exe) = process.cmd().first() {
-        let exe_str = exe.to_string_lossy();
-        if let Some(agent) = find_agent_by_name(&exe_str) {
+    if let Some(arg) = process.cmd().iter().skip(1).find(|arg| {
+        let arg_str = arg.to_string_lossy();
+        !arg_str.starts_with('-')
+    }) {
+        let arg_str = arg.to_string_lossy();
+        if let Some(agent) = find_agent_by_name(&arg_str) {
             return Some(agent);
         }
     }
@@ -294,6 +300,7 @@ mod tests {
         assert!(find_agent_by_name("copilot-agent").is_some());
         assert!(find_agent_by_name("amazon-q").is_some());
         assert!(find_agent_by_name("amp").is_some());
+        assert!(find_agent_by_name("/opt/homebrew/bin/amp").is_some());
         assert!(find_agent_by_name("unknown").is_none());
     }
 
