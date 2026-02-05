@@ -38,7 +38,7 @@ const KNOWN_AGENTS: &[Agent] = &[
     Agent {
         process_names: &["goose"],
         env_vars: &[],
-        email: "Goose <noreply@block.xyz>",
+        email: "Goose <opensource@block.xyz>",
     },
     Agent {
         process_names: &["cursor", "cursor-agent"],
@@ -83,7 +83,7 @@ const KNOWN_AGENTS: &[Agent] = &[
     Agent {
         process_names: &["gemini"],
         env_vars: &[],
-        email: "Gemini <218195315+gemini-cli@users.noreply.github.com>",
+        email: "Gemini CLI Agent <gemini-cli-agent@google.com>",
     },
 ];
 
@@ -386,6 +386,8 @@ mod tests {
         assert!(find_agent_by_name("amazon-q").is_some());
         assert!(find_agent_by_name("amp").is_some());
         assert!(find_agent_by_name("/opt/homebrew/bin/amp").is_some());
+        assert!(find_agent_by_name("gemini").is_some());
+        assert!(find_agent_by_name("goose").is_some());
         assert!(find_agent_by_name("unknown").is_none());
     }
 
