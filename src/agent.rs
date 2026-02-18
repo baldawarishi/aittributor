@@ -59,7 +59,7 @@ pub const KNOWN_AGENTS: &[Agent] = &[
         breadcrumb_ext: None,
     },
     Agent {
-        process_names: &["amazon-q", "q"],
+        process_names: &["amazon-q"],
         env_vars: &[],
         email: "Amazon Q Developer <noreply@amazon.com>",
         breadcrumb_dir: None,
