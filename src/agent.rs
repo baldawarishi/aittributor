@@ -88,6 +88,16 @@ pub const KNOWN_AGENTS: &[Agent] = &[
     },
 ];
 
+/// Extract the bare email address from a "Name <addr>" string.
+/// e.g. "Claude Code <noreply@anthropic.com>" → "noreply@anthropic.com"
+pub fn extract_email_addr(email: &str) -> &str {
+    email
+        .split('<')
+        .nth(1)
+        .and_then(|s| s.split('>').next())
+        .unwrap_or(email)
+}
+
 pub fn find_agent_by_name(name: &str) -> Option<&'static Agent> {
     let path = Path::new(name);
     let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or(name);

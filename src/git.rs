@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::agent::Agent;
+use crate::agent::{Agent, extract_email_addr};
 
 pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
     let mut current = start_path.to_path_buf();
@@ -22,7 +22,8 @@ pub fn find_git_root(start_path: &Path) -> Option<PathBuf> {
 pub fn append_trailers(commit_msg_file: &PathBuf, agent: &Agent, debug: bool) -> std::io::Result<()> {
     let content = fs::read_to_string(commit_msg_file)?;
 
-    if content.contains("Co-authored-by:") && content.contains(agent.email) {
+    let addr = extract_email_addr(agent.email);
+    if content.contains("Co-authored-by:") && content.contains(addr) {
         if debug {
             eprintln!("\n=== Git Command ===");
             eprintln!("Trailers already present, skipping git interpret-trailers");

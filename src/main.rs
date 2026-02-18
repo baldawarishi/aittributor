@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
 
-use agent::{Agent, find_agent_by_env, find_agent_for_process};
+use agent::{Agent, extract_email_addr, find_agent_by_env, find_agent_for_process};
 use git::{append_trailers, find_git_root};
 
 #[derive(Parser)]
@@ -31,8 +31,9 @@ struct Cli {
     debug: bool,
 }
 
-fn walk_ancestry(system: &System, debug: bool) -> Option<&'static Agent> {
+fn walk_ancestry(system: &System, debug: bool) -> Vec<&'static Agent> {
     let mut current_pid = Pid::from_u32(std::process::id());
+    let mut agents = Vec::new();
 
     if debug {
         eprintln!("\nWalking ancestry from PID {}...", current_pid);
@@ -43,7 +44,7 @@ fn walk_ancestry(system: &System, debug: bool) -> Option<&'static Agent> {
             eprintln!("  PID {}: {:?}", current_pid, process.name());
         }
         if let Some(agent) = find_agent_for_process(process, debug) {
-            return Some(agent);
+            agents.push(agent);
         }
 
         match process.parent() {
@@ -54,12 +55,13 @@ fn walk_ancestry(system: &System, debug: bool) -> Option<&'static Agent> {
         }
     }
 
-    None
+    agents
 }
 
-fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug: bool) -> Option<&'static Agent> {
+fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug: bool) -> Vec<&'static Agent> {
     let mut queue = std::collections::VecDeque::new();
     let mut visited = std::collections::HashSet::new();
+    let mut agents = Vec::new();
 
     queue.push_back(root_pid);
 
@@ -84,7 +86,7 @@ fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug
             if debug {
                 eprintln!("    Found agent in tree with matching cwd");
             }
-            return Some(agent);
+            agents.push(agent);
         }
 
         for child in system.processes().values() {
@@ -94,20 +96,19 @@ fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug
         }
     }
 
-    None
+    agents
 }
 
-fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf, debug: bool) -> Option<&'static Agent> {
+fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf, debug: bool) -> Vec<&'static Agent> {
     let mut current_pid = Pid::from_u32(std::process::id());
     let mut checked_ancestors = std::collections::HashSet::new();
+    let mut agents = Vec::new();
 
     if debug {
         eprintln!("\nWalking ancestry and descendants...");
     }
 
-    loop {
-        let process = system.process(current_pid)?;
-
+    while let Some(process) = system.process(current_pid) {
         if !checked_ancestors.insert(current_pid) {
             break;
         }
@@ -126,18 +127,18 @@ fn walk_ancestry_and_descendants(system: &System, repo_path: &PathBuf, debug: bo
                 continue;
             }
 
-            if let Some(agent) = check_process_tree(system, sibling.pid(), repo_path, debug) {
-                return Some(agent);
-            }
+            agents.extend(check_process_tree(system, sibling.pid(), repo_path, debug));
         }
 
         current_pid = parent_pid;
     }
 
-    None
+    agents
 }
 
-fn detect_agent(debug: bool) -> Option<&'static Agent> {
+fn detect_agents(debug: bool) -> Vec<&'static Agent> {
+    let mut agents = Vec::new();
+
     if debug {
         eprintln!("=== Agent Detection Debug ===");
         eprintln!("\nChecking environment variables...");
@@ -146,10 +147,13 @@ fn detect_agent(debug: bool) -> Option<&'static Agent> {
         if debug {
             eprintln!("  ✓ Found agent via env: {}", agent.email);
         }
-        return Some(agent);
+        agents.push(agent);
     }
 
-    let current_dir = std::env::current_dir().ok()?;
+    let current_dir = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return agents,
+    };
     let repo_path = find_git_root(&current_dir).unwrap_or(current_dir);
     if debug {
         eprintln!("  Repository path: {}", repo_path.display());
@@ -162,11 +166,10 @@ fn detect_agent(debug: bool) -> Option<&'static Agent> {
         ),
     );
 
-    if let Some(agent) = walk_ancestry(&system, debug) {
-        return Some(agent);
-    }
+    agents.extend(walk_ancestry(&system, debug));
+    agents.extend(walk_ancestry_and_descendants(&system, &repo_path, debug));
 
-    walk_ancestry_and_descendants(&system, &repo_path, debug)
+    agents
 }
 
 fn breadcrumb_fallback(debug: bool) -> Vec<&'static Agent> {
@@ -175,32 +178,49 @@ fn breadcrumb_fallback(debug: bool) -> Vec<&'static Agent> {
     breadcrumbs::detect_agents_from_breadcrumbs(&repo_path, debug)
 }
 
+fn dedup_agents(agents: Vec<&'static Agent>) -> Vec<&'static Agent> {
+    let mut seen = std::collections::HashSet::new();
+    agents
+        .into_iter()
+        .filter(|a| {
+            let addr = extract_email_addr(a.email);
+            seen.insert(addr)
+        })
+        .collect()
+}
+
+fn detect_and_merge(debug: bool) -> Vec<&'static Agent> {
+    let (bc_tx, bc_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = bc_tx.send(breadcrumb_fallback(debug));
+    });
+
+    let mut agents = detect_agents(debug);
+
+    if let Ok(bc_agents) = bc_rx.recv() {
+        agents.extend(bc_agents);
+    }
+
+    dedup_agents(agents)
+}
+
 fn run(cli: Cli) {
+    let agents = detect_and_merge(cli.debug);
+
     let Some(commit_msg_file) = cli.commit_msg_file else {
-        if let Some(agent) = detect_agent(cli.debug) {
+        if agents.is_empty() {
+            eprintln!("No agent found");
+            std::process::exit(1);
+        }
+        for agent in &agents {
             println!("{}", agent.email);
-        } else {
-            let agents = breadcrumb_fallback(cli.debug);
-            if agents.is_empty() {
-                eprintln!("No agent found");
-                std::process::exit(1);
-            }
-            for agent in agents {
-                println!("{}", agent.email);
-            }
         }
         return;
     };
 
-    if let Some(agent) = detect_agent(cli.debug) {
+    for agent in &agents {
         if let Err(e) = append_trailers(&commit_msg_file, agent, cli.debug) {
             eprintln!("aittributor: failed to append trailers: {}", e);
-        }
-    } else {
-        for agent in breadcrumb_fallback(cli.debug) {
-            if let Err(e) = append_trailers(&commit_msg_file, agent, cli.debug) {
-                eprintln!("aittributor: failed to append trailers: {}", e);
-            }
         }
     }
 }
@@ -222,7 +242,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent::{KNOWN_AGENTS, find_agent_by_name};
+    use agent::{KNOWN_AGENTS, extract_email_addr, find_agent_by_name};
     use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -326,6 +346,60 @@ mod tests {
             ai_assisted_count, 1,
             "Ai-assisted trailer should appear exactly once, found {} occurrences",
             ai_assisted_count
+        );
+    }
+
+    #[test]
+    fn test_extract_email_addr() {
+        assert_eq!(
+            extract_email_addr("Claude Code <noreply@anthropic.com>"),
+            "noreply@anthropic.com"
+        );
+        assert_eq!(
+            extract_email_addr("Claude Opus 4.6 <noreply@anthropic.com>"),
+            "noreply@anthropic.com"
+        );
+        assert_eq!(extract_email_addr("plain@email.com"), "plain@email.com");
+        assert_eq!(extract_email_addr("Amp <amp@ampcode.com>"), "amp@ampcode.com");
+    }
+
+    #[test]
+    fn test_dedup_agents_removes_duplicates() {
+        let claude = &KNOWN_AGENTS[0]; // Claude Code
+        let amp = &KNOWN_AGENTS[8]; // Amp
+        let agents = vec![claude, amp, claude];
+        let deduped = dedup_agents(agents);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].email, claude.email);
+        assert_eq!(deduped[1].email, amp.email);
+    }
+
+    #[test]
+    fn test_dedup_agents_empty() {
+        let agents: Vec<&'static Agent> = vec![];
+        let deduped = dedup_agents(agents);
+        assert!(deduped.is_empty());
+    }
+
+    #[test]
+    fn test_append_trailers_skips_existing_email_different_name() {
+        // Simulate Claude Code already having added a trailer with a different display name
+        // but the same email address (e.g. "Claude Opus 4.6 <noreply@anthropic.com>")
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Initial commit").unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>").unwrap();
+
+        let agent = &KNOWN_AGENTS[0]; // Claude Code <noreply@anthropic.com>
+        append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
+
+        let content = fs::read_to_string(file.path()).unwrap();
+        // Should NOT have added a second Co-authored-by for noreply@anthropic.com
+        let co_author_count = content.matches("noreply@anthropic.com").count();
+        assert_eq!(
+            co_author_count, 1,
+            "Should not add duplicate trailer for same email address, found {} occurrences",
+            co_author_count
         );
     }
 }

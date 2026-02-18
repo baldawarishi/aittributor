@@ -4,12 +4,14 @@ It does this by matching process names against known agents, and working directo
 
 It finds agents in four ways:
 
-1. First it checks for agent-specific environment variables.
-2. Then it walks its own process ancestry, under the assumption that the git commit was initiated by an agent.
-3. If a known agent is not found, it walks up the process tree and checks all descendants of siblings at each level, looking for an agent working in the same repository.
-4. If live process detection finds nothing, it checks agent-specific state files ("breadcrumbs") to determine if an agent was recently active in this repo (e.g. `~/.claude/projects/`, `~/.codex/sessions/`).
+1. It checks for agent-specific environment variables.
+2. It walks its own process ancestry, under the assumption that the git commit was initiated by an agent.
+3. It walks up the process tree and checks all descendants of siblings at each level, looking for agents working in the same repository.
+4. It checks agent-specific state files ("breadcrumbs") to determine if an agent was recently active in this repo (e.g. `~/.claude/projects/`, `~/.codex/sessions/`).
 
-If an agent is found, it will append the following git trailers to the git commit:
+Multiple agents can be attributed in a single commit. Results are deduplicated by email address.
+
+If any agents are found, it will append the following git trailers to the git commit:
 
 ```
 Co-authored-by: <email>
@@ -58,6 +60,10 @@ prepare-commit-msg:
 ln -s /usr/local/bin/aittributor .git/hooks/prepare-commit-msg
 ```
 
-## Breadcrumb fallback
+## Known limitations
 
-If the AI agent exits before you commit, aittributor falls back to checking agent-specific state files to detect recently active agents. This only works when state files are available. No additional setup is required. 
+**Process detection is not always possible.** Agents may exit before the commit runs, or use process names that don't match (e.g. Electron-based desktop apps). When process scanning fails, aittributor falls back to agent session history — checking state files for recent activity in the same repo. This fallback only works for agents that write state files (currently Claude and Codex), and it cannot distinguish between an agent that wrote the code being committed and one that was only used for research. The result is a bias toward over-attribution, which is a deliberate tradeoff: undercounting real AI usage is harder to correct after the fact than occasional overcounting.
+
+**Agent-initiated commits are the most reliable.** Attribution is most accurate when the agent itself runs `git commit`. Manual commits while an agent session is open (or recently closed) are the main source of attribution that may not reflect actual code contribution.
+
+**Duplicate trailers when multiple writers are active.** Aittributor deduplicates by email address against both its own detected agents and any `Co-authored-by` trailers already in the commit message. However, if another process writes a trailer *after* aittributor runs, duplicates with different display names may appear.
