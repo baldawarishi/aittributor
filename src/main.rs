@@ -242,7 +242,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent::KNOWN_AGENTS;
     use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -256,7 +255,7 @@ mod tests {
         writeln!(file).unwrap();
         writeln!(file, "Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>").unwrap();
 
-        let agent = &KNOWN_AGENTS[0]; // Claude Code <noreply@anthropic.com>
+        let agent = Agent::find_by_name("claude").unwrap();
         append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
 
         let content = fs::read_to_string(file.path()).unwrap();
@@ -271,8 +270,8 @@ mod tests {
 
     #[test]
     fn test_dedup_agents_removes_duplicates() {
-        let claude = &KNOWN_AGENTS[0]; // Claude Code
-        let amp = &KNOWN_AGENTS[8]; // Amp
+        let claude = Agent::find_by_name("claude").unwrap();
+        let amp = Agent::find_by_name("amp").unwrap();
         let agents = vec![claude, amp, claude];
         let deduped = dedup_agents(agents);
         assert_eq!(deduped.len(), 2);
@@ -338,7 +337,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "Initial commit").unwrap();
 
-        let agent = &KNOWN_AGENTS[0];
+        let agent = Agent::find_by_name("claude").unwrap();
         append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
 
         let content = fs::read_to_string(file.path()).unwrap();
@@ -351,7 +350,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "Initial commit").unwrap();
 
-        let agent = &KNOWN_AGENTS[0];
+        let agent = Agent::find_by_name("claude").unwrap();
         append_trailers(&file.path().to_path_buf(), agent, false).unwrap();
         let content1 = fs::read_to_string(file.path()).unwrap();
 
@@ -385,8 +384,8 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "Initial commit").unwrap();
 
-        let agent1 = &KNOWN_AGENTS[0]; // Claude
-        let agent2 = &KNOWN_AGENTS[8]; // Amp
+        let agent1 = Agent::find_by_name("claude").unwrap();
+        let agent2 = Agent::find_by_name("amp").unwrap();
 
         append_trailers(&file.path().to_path_buf(), agent1, false).unwrap();
         append_trailers(&file.path().to_path_buf(), agent2, false).unwrap();
