@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
 
-use agent::{Agent, extract_email_addr, find_agent_by_env, find_agent_for_process};
+use agent::Agent;
 use git::{append_trailers, find_git_root};
 
 #[derive(Parser)]
@@ -43,7 +43,7 @@ fn walk_ancestry(system: &System, debug: bool) -> Vec<&'static Agent> {
         if debug {
             eprintln!("  PID {}: {:?}", current_pid, process.name());
         }
-        if let Some(agent) = find_agent_for_process(process, debug) {
+        if let Some(agent) = Agent::find_for_process(process, debug) {
             agents.push(agent);
         }
 
@@ -79,7 +79,7 @@ fn check_process_tree(system: &System, root_pid: Pid, repo_path: &PathBuf, debug
             eprintln!("    Checking PID {}: {:?}", pid, process.name());
         }
 
-        if let Some(agent) = find_agent_for_process(process, debug)
+        if let Some(agent) = Agent::find_for_process(process, debug)
             && let Some(cwd) = process.cwd()
             && cwd.starts_with(repo_path)
         {
@@ -143,7 +143,7 @@ fn detect_agents(debug: bool) -> Vec<&'static Agent> {
         eprintln!("=== Agent Detection Debug ===");
         eprintln!("\nChecking environment variables...");
     }
-    if let Some(agent) = find_agent_by_env() {
+    if let Some(agent) = Agent::find_by_env() {
         if debug {
             eprintln!("  ✓ Found agent via env: {}", agent.email);
         }
@@ -183,7 +183,7 @@ fn dedup_agents(agents: Vec<&'static Agent>) -> Vec<&'static Agent> {
     agents
         .into_iter()
         .filter(|a| {
-            let addr = extract_email_addr(a.email);
+            let addr = Agent::extract_email_addr(a.email);
             seen.insert(addr)
         })
         .collect()
@@ -242,28 +242,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent::{KNOWN_AGENTS, extract_email_addr, find_agent_by_name};
+    use agent::KNOWN_AGENTS;
     use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_find_agent_by_name() {
-        assert!(find_agent_by_name("claude").is_some());
-        assert!(find_agent_by_name("Claude").is_some());
-        assert!(find_agent_by_name("claude-code").is_some());
-        assert!(find_agent_by_name("cursor").is_some());
-        assert!(find_agent_by_name("cursor-agent").is_some());
-        assert!(find_agent_by_name("aider").is_some());
-        assert!(find_agent_by_name("windsurf").is_some());
-        assert!(find_agent_by_name("codex").is_some());
-        assert!(find_agent_by_name("copilot-agent").is_some());
-        assert!(find_agent_by_name("amazon-q").is_some());
-        assert!(find_agent_by_name("amp").is_some());
-        assert!(find_agent_by_name("/opt/homebrew/bin/amp").is_some());
-        assert!(find_agent_by_name("gemini").is_some());
-        assert!(find_agent_by_name("goose").is_some());
-        assert!(find_agent_by_name("unknown").is_none());
+        assert!(Agent::find_by_name("claude").is_some());
+        assert!(Agent::find_by_name("Claude").is_some());
+        assert!(Agent::find_by_name("claude-code").is_some());
+        assert!(Agent::find_by_name("cursor").is_some());
+        assert!(Agent::find_by_name("cursor-agent").is_some());
+        assert!(Agent::find_by_name("aider").is_some());
+        assert!(Agent::find_by_name("windsurf").is_some());
+        assert!(Agent::find_by_name("codex").is_some());
+        assert!(Agent::find_by_name("copilot-agent").is_some());
+        assert!(Agent::find_by_name("amazon-q").is_some());
+        assert!(Agent::find_by_name("amp").is_some());
+        assert!(Agent::find_by_name("/opt/homebrew/bin/amp").is_some());
+        assert!(Agent::find_by_name("gemini").is_some());
+        assert!(Agent::find_by_name("goose").is_some());
+        assert!(Agent::find_by_name("unknown").is_none());
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
         unsafe {
             std::env::set_var("CLINE_ACTIVE", "true");
         }
-        let agent = find_agent_by_env();
+        let agent = Agent::find_by_env();
         assert!(agent.is_some());
         assert!(agent.unwrap().email.contains("Cline"));
         unsafe {
@@ -352,15 +352,15 @@ mod tests {
     #[test]
     fn test_extract_email_addr() {
         assert_eq!(
-            extract_email_addr("Claude Code <noreply@anthropic.com>"),
+            Agent::extract_email_addr("Claude Code <noreply@anthropic.com>"),
             "noreply@anthropic.com"
         );
         assert_eq!(
-            extract_email_addr("Claude Opus 4.6 <noreply@anthropic.com>"),
+            Agent::extract_email_addr("Claude Opus 4.6 <noreply@anthropic.com>"),
             "noreply@anthropic.com"
         );
-        assert_eq!(extract_email_addr("plain@email.com"), "plain@email.com");
-        assert_eq!(extract_email_addr("Amp <amp@ampcode.com>"), "amp@ampcode.com");
+        assert_eq!(Agent::extract_email_addr("plain@email.com"), "plain@email.com");
+        assert_eq!(Agent::extract_email_addr("Amp <amp@ampcode.com>"), "amp@ampcode.com");
     }
 
     #[test]
